@@ -1,0 +1,74 @@
+# ==============================================================================
+# TripMitra — Git Exclusion Rules for Public Repository
+# ==============================================================================
+
+# 1. Environment Variables & Secrets (CRITICAL)
+# Exclude all actual .env files and environment variants
+.env
+.env.*
+*.env
+**/.env
+**/.env.*
+**/*.env
+backend/.env*
+
+# Explicitly preserve safe configuration templates
+!**/.env.example
+!backend/.env.example
+!.env.example
+
+# 2. Dependencies
+node_modules/
+**/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# 3. Production Build & Compilation Output
+dist/
+**/dist/
+build/
+**/build/
+out/
+*.tsbuildinfo
+
+# 4. Logs & Diagnostics
+logs/
+**/logs/
+*.log
+**/*.log
+pino-*.log
+
+# 5. Temporary & Scratch Files
+*.bak
+*.backup
+*.tmp
+*.temp
+temp/
+tmp/
+.temp/
+.cache/
+
+# 6. Operating System & Local Editor Artifacts
+.DS_Store
+Thumbs.db
+Desktop.ini
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 7. Test Coverage
+coverage/
+**/coverage/
+.nyc_output/
+
+# 8. Private Certificates & Keys
+*.pem
+*.key
+*.cert
+*.crt
+*.pfx
+*.p12

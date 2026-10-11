@@ -1,0 +1,57 @@
+{
+    "name": "ai-travel-companion-backend",
+    "version": "1.0.0",
+    "description": "A Personalized WhatsApp-Based AI Tourist Assistant (Backend)",
+    "main": "dist/server.js",
+    "type": "module",
+    "scripts": {
+        "dev": "tsx watch src/server.ts",
+        "build": "tsc",
+        "start": "npm run build && node dist/server.js",
+        "typecheck": "tsc --noEmit",
+        "lint": "eslint src --ext .ts",
+        "format": "prettier --write \"src/**/*.{ts,js,json,md}\"",
+        "test": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --runInBand --ci --forceExit",
+        "test:conn": "tsx src/scripts/testConnection.ts",
+        "rag:ingest": "tsx src/scripts/ingestKnowledge.ts",
+        "knowledge:ingest": "tsx src/scripts/ingestKnowledge.ts",
+        "rag:vector-index": "tsx src/scripts/manageSearchIndex.ts"
+    },
+    "keywords": [
+        "ai",
+        "travel-companion",
+        "whatsapp",
+        "express",
+        "typescript"
+    ],
+    "author": "Google Antigravity Pair Programmer",
+    "license": "ISC",
+    "dependencies": {
+        "@google/genai": "^2.21.0",
+        "cors": "^2.8.5",
+        "dotenv": "^16.4.7",
+        "express": "^4.21.2",
+        "helmet": "^8.0.0",
+        "mongoose": "^9.9.4",
+        "pino": "^9.6.0",
+        "pino-pretty": "^13.0.0",
+        "zod": "^3.24.1"
+    },
+    "devDependencies": {
+        "@types/cors": "^2.8.17",
+        "@types/express": "^4.17.21",
+        "@types/jest": "^29.5.14",
+        "@types/node": "^22.10.7",
+        "@types/supertest": "^6.0.2",
+        "@typescript-eslint/eslint-plugin": "^8.21.0",
+        "@typescript-eslint/parser": "^8.21.0",
+        "eslint": "^8.57.1",
+        "jest": "^29.7.0",
+        "mongodb-memory-server": "^11.2.0",
+        "prettier": "^3.4.2",
+        "supertest": "^7.0.0",
+        "ts-jest": "^29.2.5",
+        "tsx": "^4.19.2",
+        "typescript": "^5.7.3"
+    }
+}

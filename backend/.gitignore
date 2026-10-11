@@ -1,0 +1,36 @@
+# ==============================================================================
+# TripMitra — Backend Git Exclusion Rules
+# ==============================================================================
+
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Production Build Output
+dist/
+**/dist/
+build/
+**/build/
+
+# Secrets and Environment Variables
+.env
+.env.*
+*.env
+**/.env*
+!**/.env.example
+!.env.example
+
+# Logs and Diagnostics
+logs/
+*.log
+**/*.log
+
+# Test Coverage
+coverage/
+.nyc_output/
+
+# OS and Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
