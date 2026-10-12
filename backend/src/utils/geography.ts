@@ -98,16 +98,80 @@ export const KNOWN_DESTINATION_COORDINATES = {
     kothrud: { latitude: 18.5074, longitude: 73.8077 },
     hinjewadi: { latitude: 18.5912, longitude: 73.7389 },
     wakad: { latitude: 18.5987, longitude: 73.7687 },
-    vimannagar: { latitude: 18.5679, longitude: 73.9143 }
+    vimannagar: { latitude: 18.5679, longitude: 73.9143 },
+    nashik: { latitude: 19.9975, longitude: 73.7898 },
+    aurangabad: { latitude: 19.8762, longitude: 75.3433 },
+    kolhapur: { latitude: 16.7050, longitude: 74.2433 },
+    nagpur: { latitude: 21.1458, longitude: 79.0882 },
+    indore: { latitude: 22.7196, longitude: 75.8577 },
+    ahmedabad: { latitude: 23.0225, longitude: 72.5714 },
+    jodhpur: { latitude: 26.2389, longitude: 73.0243 },
+    jaisalmer: { latitude: 26.9157, longitude: 70.9083 },
+    coorg: { latitude: 12.4244, longitude: 75.7382 },
+    kodaikanal: { latitude: 10.2381, longitude: 77.4892 },
+    gangtok: { latitude: 27.3389, longitude: 88.6065 },
+    shillong: { latitude: 25.5788, longitude: 91.8933 },
+    leh: { latitude: 34.1526, longitude: 77.5771 },
+    srinagar: { latitude: 34.0837, longitude: 74.7973 },
+    nainital: { latitude: 29.3919, longitude: 79.4542 },
+    mussoorie: { latitude: 30.4598, longitude: 78.0644 }
 };
 export function getDestinationCoordinates(destination: string) {
     if (!destination)
         return null;
     const slug = destination.toLowerCase().replace(/[^a-z0-9]+/g, "");
+    if (!slug)
+        return null;
+    if (slug in KNOWN_DESTINATION_COORDINATES) {
+        return KNOWN_DESTINATION_COORDINATES[slug as keyof typeof KNOWN_DESTINATION_COORDINATES];
+    }
     for (const [key, coords] of Object.entries(KNOWN_DESTINATION_COORDINATES)) {
-        if (slug.includes(key) || key.includes(slug)) {
+        if (slug.includes(key) || (slug.length >= 4 && key.includes(slug))) {
             return coords;
         }
     }
     return null;
 }
+/**
+ * Resolves coordinates for a destination or city name using the local dictionary first,
+ * falling back to Open-Meteo's geocoding API when not in the static dictionary.
+ */
+export async function resolveDestinationCoordinates(destination: string): Promise<{
+    latitude: number;
+    longitude: number;
+} | null> {
+    const known = getDestinationCoordinates(destination);
+    if (known) {
+        return known;
+    }
+    const cleaned = (destination || "").trim();
+    if (cleaned.length < 2) {
+        return null;
+    }
+    try {
+        const url = new URL("https://geocoding-api.open-meteo.com/v1/search");
+        url.searchParams.set("name", cleaned);
+        url.searchParams.set("count", "1");
+        url.searchParams.set("language", "en");
+        url.searchParams.set("format", "json");
+        const response = await fetch(url.toString(), {
+            signal: AbortSignal.timeout(4000)
+        });
+        if (!response.ok) {
+            return null;
+        }
+        const json: any = await response.json();
+        const first = Array.isArray(json?.results) ? json.results[0] : null;
+        if (first && isValidCoordinate(first.latitude, first.longitude)) {
+            return {
+                latitude: first.latitude,
+                longitude: first.longitude
+            };
+        }
+        return null;
+    }
+    catch {
+        return null;
+    }
+}
+

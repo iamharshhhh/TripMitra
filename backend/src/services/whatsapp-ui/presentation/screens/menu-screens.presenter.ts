@@ -465,13 +465,35 @@ export class MenuScreensPresenter {
     /**
      * Dedicated Live Weather Card with multi-day forecasts and interactive controls.
      */
-    static sendWeatherCard(to: string, destination: string, forecasts: DailyForecast[], tripId: string, lang = "en", dateRangeStr: string) {
+    static sendWeatherCard(to: string, destination: string, forecasts: DailyForecast[], tripId: string, lang = "en", dateRangeStr: string, origin?: "location" | "menu") {
         const strings = MULTILINGUAL_UI_STRINGS[lang] || MULTILINGUAL_UI_STRINGS.en;
         const header = strings.menuHeaders.weatherCardHeader(destination);
         const forecastLines = WeatherFormatter.formatForecastLines(forecasts, lang, dateRangeStr);
         const cardBody = `${header}\n\n${forecastLines.join("\n\n")}`;
+        const isLocationOrigin = origin === "location" ||
+            destination === "Your Location" ||
+            destination === "आपले स्थान" ||
+            destination === "आपका स्थान";
+        let refreshActionId: string = WhatsAppActionId.WEATHER_REFRESH;
+        if (isLocationOrigin) {
+            refreshActionId = `${WhatsAppActionId.WEATHER_REFRESH}:__location__`;
+        }
+        else if (destination && destination.trim().length > 0) {
+            const cleanDest = destination.trim();
+            const isSimpleAlphanumeric = /^[a-zA-Z0-9 -]+$/.test(cleanDest);
+            const asciiSlug = cleanDest.replace(/\s+/g, "_").replace(/^_+|_+$/g, "");
+            if (isSimpleAlphanumeric && asciiSlug.length > 0 && /^[a-zA-Z0-9_-]+$/.test(asciiSlug)) {
+                refreshActionId = `${WhatsAppActionId.WEATHER_REFRESH}:${asciiSlug.slice(0, 180)}`;
+            }
+            else {
+                const encoded = `b64_${Buffer.from(cleanDest, "utf8").toString("base64url")}`;
+                if (encoded.length <= 180) {
+                    refreshActionId = `${WhatsAppActionId.WEATHER_REFRESH}:${encoded}`;
+                }
+            }
+        }
         const buttons = [
-            { id: `${WhatsAppActionId.WEATHER_REFRESH}:${destination}`, title: "🔄 Refresh" },
+            { id: refreshActionId, title: "🔄 Refresh" },
             { id: WhatsAppActionId.HOME, title: strings.buttonLabels[WhatsAppActionId.HOME] }
         ];
         const fallbackOptions = buttons.map((b, i) => ({
@@ -502,6 +524,49 @@ export class MenuScreensPresenter {
             menuContextToSet: {
                 menuType: "weather_card",
                 tripId,
+                validOptions: fallbackOptions,
+                ttlSeconds: botUIConfig.menuTTLSeconds
+            }
+        };
+    }
+    /**
+     * Interactive prompt asking user to provide a destination or share a location pin for weather.
+     */
+    static sendWeatherPrompt(to: string, lang = "en") {
+        const strings = MULTILINGUAL_UI_STRINGS[lang] || MULTILINGUAL_UI_STRINGS.en;
+        const promptBody = `${strings.menuHeaders.weatherPromptNoDest}\n\n${lang === "mr" ? "खाली शहराचे नाव टाईप करा किंवा आपले लोकेशन शेअर करा." : lang === "hi" ? "नीचे शहर का नाम टाइप करें या अपना स्थान साझा करें।" : "Type a city name below (e.g. Pune, Mumbai, Jaipur) or share your location pin."}`;
+        const buttons = [
+            { id: WhatsAppActionId.MENU_LOCATION, title: strings.buttonLabels[WhatsAppActionId.MENU_LOCATION] || (lang === "mr" ? "लोकेशन शेअर करा" : lang === "hi" ? "स्थान साझा करें" : "Share Location") },
+            { id: WhatsAppActionId.HOME, title: strings.buttonLabels[WhatsAppActionId.HOME] || (lang === "mr" ? "मुख्य मेनू" : lang === "hi" ? "मुख्य मेनू" : "Main Menu") }
+        ];
+        const fallbackOptions = buttons.map((b, i) => ({
+            key: String(i + 1),
+            label: b.title,
+            rawActionId: b.id
+        }));
+        const fallbackText = `${promptBody}\n\n${strings.menuHeaders.fallbackIntro}\n${fallbackOptions
+            .map((o) => `${o.key}. ${o.label}`)
+            .join("\n")}`;
+        let interactivePayload;
+        if (botUIConfig.enabled) {
+            try {
+                interactivePayload = WhatsAppMessageBuilder.buildButtonMessage({
+                    to,
+                    bodyText: promptBody.slice(0, 1024),
+                    buttons
+                });
+            }
+            catch {
+                interactivePayload = undefined;
+            }
+        }
+        return {
+            textMessages: interactivePayload ? [] : [promptBody],
+            interactivePayload,
+            fallbackText,
+            menuContextToSet: {
+                menuType: "weather_card",
+                tripId: "__weather_prompt__",
                 validOptions: fallbackOptions,
                 ttlSeconds: botUIConfig.menuTTLSeconds
             }

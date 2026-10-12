@@ -21,9 +21,9 @@ export const DEFAULT_SCORING_CONFIG = {
 const CATEGORY_INTEREST_MAP = {
     heritage: ["history", "heritage", "monument", "fort", "palace", "temple", "museum", "historical", "architecture", "culture", "religious", "spiritual", "art", "photography", "photos"],
     nature: ["nature", "park", "garden", "wildlife", "lake", "hills", "trekking", "scenic", "greenery", "beach", "beaches", "coastal", "water", "sea", "photography", "photos"],
-    restaurant: ["food", "dining", "cuisine", "restaurant", "cafe", "cafes", "street food", "local food", "culinary", "drinks", "nightlife"],
-    shopping: ["shopping", "market", "markets", "bazaar", "mall", "handicrafts", "clothes", "souvenirs"],
-    activity: ["activity", "adventure", "trekking", "sports", "entertainment", "amusement", "water park", "nightlife", "photography", "photos"],
+    restaurant: ["food", "dining", "cuisine", "restaurant", "cafe", "cafes", "street food", "local food", "culinary", "drinks", "nightlife", "nightlife_entertainment", "bar", "pub", "lounge"],
+    shopping: ["shopping", "market", "markets", "bazaar", "mall", "handicrafts", "clothes", "souvenirs", "night market"],
+    activity: ["activity", "adventure", "trekking", "sports", "entertainment", "amusement", "water park", "nightlife", "nightlife_entertainment", "bar", "pub", "lounge", "club", "photography", "photos"],
     attraction: ["sightseeing", "attractions", "tourist", "landmarks", "explore", "beach", "beaches", "monument", "photography", "photos"]
 };
 export class PlaceScoringService {
@@ -167,19 +167,25 @@ export class PlaceScoringService {
         const descText = (candidate.description || "").toLowerCase();
         let matchedInterests = 0;
         for (const interest of userInterests) {
-            // 1. Direct match with category or mapped category keywords
+            const isNightlife = interest === "nightlife_entertainment" || interest.includes("nightlife");
+            const interestTokens = isNightlife
+                ? ["nightlife", "nightlife_entertainment", "night life", "club", "bar", "pub", "lounge", "entertainment"]
+                : [interest];
+
+            // 1. Direct match with category or mapped category keywords, or night suitability
             if (placeCategory === interest ||
-                relatedKeywords.some((kw) => kw.includes(interest) || interest.includes(kw))) {
+                (isNightlife && candidate.timeOfDaySuitability === "night") ||
+                relatedKeywords.some((kw) => interestTokens.some((it) => kw.includes(it) || it.includes(kw)))) {
                 matchedInterests += 1.0;
                 continue;
             }
             // 2. Match with Google place types
-            if (googleTypes.some((gt) => gt.includes(interest) || interest.includes(gt))) {
+            if (googleTypes.some((gt) => interestTokens.some((it) => gt.includes(it) || it.includes(gt)))) {
                 matchedInterests += 0.8;
                 continue;
             }
             // 3. Match in description
-            if (descText.includes(interest)) {
+            if (interestTokens.some((it) => descText.includes(it))) {
                 matchedInterests += 0.5;
                 continue;
             }

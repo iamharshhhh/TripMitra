@@ -111,9 +111,11 @@ export class WhatsAppActionParser {
                 this.assertParamCount(parts, 1, trimmed);
                 return { type: "LOCATION_NEXT_STOP" };
             case WhatsAppActionId.WEATHER:
+                this.assertParamCount(parts, 1, trimmed);
+                return { type: "WEATHER", origin: "location" };
             case WhatsAppActionId.MENU_WEATHER:
                 this.assertParamCount(parts, 1, trimmed);
-                return { type: "WEATHER" };
+                return { type: "WEATHER", origin: "menu" };
             case WhatsAppActionId.DIRECTIONS:
             case WhatsAppActionId.LOCATION_NAVIGATION: {
                 if (parts.length === 1) {
@@ -274,7 +276,26 @@ export class WhatsAppActionParser {
                 if (parts.length > 2) {
                     throw new ActionValidationError("WEATHER_REFRESH expects at most 1 parameter (destination)", trimmed);
                 }
-                return { type: "WEATHER_REFRESH", destination: parts[1] };
+                const rawDest = parts[1];
+                if (!rawDest) {
+                    return { type: "WEATHER_REFRESH", origin: "menu" };
+                }
+                if (rawDest === "__location__") {
+                    return { type: "WEATHER_REFRESH", origin: "location" };
+                }
+                let decodedDest = rawDest;
+                if (rawDest.startsWith("b64_")) {
+                    try {
+                        decodedDest = Buffer.from(rawDest.slice(4), "base64url").toString("utf8").trim();
+                    }
+                    catch {
+                        decodedDest = rawDest;
+                    }
+                }
+                else {
+                    decodedDest = rawDest.replace(/_/g, " ").trim();
+                }
+                return { type: "WEATHER_REFRESH", destination: decodedDest, origin: "menu" };
             }
             case WhatsAppActionId.SET_PACING: {
                 this.assertParamCount(parts, 2, trimmed);

@@ -114,9 +114,11 @@ export type TypedAction = {
 } | {
     type: "WEATHER";
     destination?: string;
+    origin?: "location" | "menu";
 } | {
     type: "WEATHER_REFRESH";
     destination?: string;
+    origin?: "location" | "menu";
 } | {
     type: "DIRECTIONS";
     tripId?: string;

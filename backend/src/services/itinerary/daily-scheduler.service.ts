@@ -59,21 +59,28 @@ export function parseStructuredHours(hours: string | string[]) {
     const rawStr = Array.isArray(hours) ? hours[0] : hours;
     if (typeof rawStr !== "string")
         return null;
-    // Check 24-hr format like "09:00-17:00" or "09:00 - 18:00"
+    // Check 24-hr format like "09:00-17:00" or "09:00 - 18:00" or overnight "18:00-02:00"
     const match24 = rawStr.match(/(\d{1,2}:\d{2})\s*(?:-|to)\s*(\d{1,2}:\d{2})/i);
     if (match24) {
+        const openMinutes = timeToMinutes(match24[1]);
+        let closeMinutes = timeToMinutes(match24[2]);
+        if (closeMinutes <= openMinutes) {
+            closeMinutes += 24 * 60;
+        }
         return {
-            openMinutes: timeToMinutes(match24[1]),
-            closeMinutes: timeToMinutes(match24[2])
+            openMinutes,
+            closeMinutes
         };
     }
     return null;
 }
 function isDiningCandidate(candidate: any) {
+    if (getPlaceTimeOfDaySuitability(candidate) === "night")
+        return false;
     if (candidate.category === "restaurant")
         return true;
     const types = candidate.provenance?.googleDetails?.types || [];
-    return types.some((t) => ["restaurant", "cafe", "food", "bakery", "meal_takeaway"].includes(t));
+    return types.some((t: string) => ["restaurant", "cafe", "food", "bakery", "meal_takeaway"].includes(t));
 }
 /**
  * Determines natural time-of-day suitability for a candidate place based primarily on real place data:
@@ -93,33 +100,27 @@ export function getPlaceTimeOfDaySuitability(candidate: CandidatePlace) {
     const googleTypes = (candidate.provenance?.googleDetails?.types || []).map((t) => t.toLowerCase());
     // 1. Operating hours strong signals
     if (structuredHours) {
-        // If it opens at 19:00 (1140 min) or later, or closes in early morning hours (e.g. 02:00-05:00)
-        if (structuredHours.openMinutes >= 1140 ||
-            structuredHours.closeMinutes > 1440 ||
-            (structuredHours.closeMinutes <= 360 && structuredHours.openMinutes >= 1080)) {
+        // If it opens at 18:00 (1080 min) or later, or opens in late afternoon (>= 17:00) and closes after midnight
+        if (structuredHours.openMinutes >= 1080 ||
+            (structuredHours.closeMinutes > 1440 && structuredHours.openMinutes >= 1020) ||
+            (structuredHours.closeMinutes <= 360 && structuredHours.openMinutes >= 1020)) {
             return "night";
         }
     }
     // 2. Night Experience Signals (nightclub, night market, camping, nightlife, pub, bar, lounge, stargazing)
-    if (googleTypes.some((t) => t.includes("night_club") || t.includes("bar") || t.includes("campground")) ||
-        name.includes("night club") ||
-        name.includes("nightclub") ||
-        name.includes("night market") ||
-        name.includes("night bazaar") ||
-        name.includes("pub") ||
-        name.includes("bar") ||
-        name.includes("lounge") ||
-        name.includes("camping") ||
-        name.includes("nightlife") ||
-        name.includes("stargazing") ||
-        desc.includes("night club") ||
-        desc.includes("nightclub") ||
-        desc.includes("night market") ||
-        desc.includes("nightlife") ||
-        desc.includes("late night") ||
-        desc.includes("sound and light show") ||
-        desc.includes("camping") ||
-        desc.includes("stargazing")) {
+    const nonNightBarPattern = /\b(juice\s+bar|coffee\s+bar|tea\s+bar|salad\s+bar|snack\s+bar|milk\s+bar|ice\s+cream\s+bar|chocolate\s+bar|chaat\s+bar|espresso\s+bar|smoothie\s+bar)\b/i;
+    const isNonNightBar = nonNightBarPattern.test(name) || nonNightBarPattern.test(desc);
+    const hasExplicitNightKeyword =
+        /\b(night\s*club|nightclub|night\s*market|night\s*bazaar|nightlife|pub|pubs|brewpub|microbrewery|taproom|lounge|discotheque|camping|stargazing|restobar|restro\s*bar|gastro\s*bar)\b/i.test(name) ||
+        /\b(night\s*club|nightclub|night\s*market|night\s*bazaar|nightlife|late\s*night|sound\s+and\s+light\s+show|camping|stargazing|pub|lounge|microbrewery)\b/i.test(desc) ||
+        (!isNonNightBar && /\bbar\b/i.test(name));
+    const hasNightGoogleType =
+        googleTypes.some((t) => t.includes("night_club") || t.includes("campground")) ||
+        (googleTypes.includes("bar") &&
+            (!googleTypes.includes("restaurant") ||
+                hasExplicitNightKeyword ||
+                Boolean(structuredHours && structuredHours.openMinutes >= 1020)));
+    if (hasExplicitNightKeyword || hasNightGoogleType) {
         return "night";
     }
     // 3. Morning Signals (Sunrise, early morning, temple, mandir, ashram, spiritual prayer)
@@ -155,15 +156,6 @@ export function getPlaceTimeOfDaySuitability(candidate: CandidatePlace) {
         cat === "shopping") {
         return "afternoon";
     }
-    // 6. Beaches / Standard Nature / Forts / Heritage (Flexible, suitable for morning, afternoon, or sunset)
-    if (googleTypes.some((t) => t.includes("beach") || t.includes("park") || t.includes("historical_landmark")) ||
-        name.includes("beach") ||
-        name.includes("fort") ||
-        name.includes("palace") ||
-        cat === "nature" ||
-        cat === "heritage") {
-        return "any";
-    }
     return "any";
 }
 /**
@@ -178,16 +170,12 @@ export function isCandidateSuitableForSlot(candidate: CandidatePlace, slot: "mor
             return false;
     }
     const suitability = getPlaceTimeOfDaySuitability(candidate);
-    // Night-only places (nightclubs, night markets, camping) MUST NOT be scheduled in morning or afternoon
-    if (suitability === "night" && (slot === "morning" || slot === "afternoon")) {
+    // Night-only places (nightclubs, pubs, bars, night markets, camping) MUST NOT be scheduled in daytime slots
+    if (suitability === "night" && slot !== "night") {
         return false;
     }
     // Night slots are exclusively for night venues or nightlife activities
     if (slot === "night" && suitability !== "night") {
-        return false;
-    }
-    // Strict morning places (e.g. sunrise-only, early morning aarti) should not be scheduled at night
-    if (suitability === "morning" && slot === "night") {
         return false;
     }
     // If slot is morning and place opens after 12:00
@@ -235,17 +223,7 @@ export function scoreSlotFit(cand: CandidatePlace, slot: "morning" | "afternoon"
         return 5;
     if (suit === "any")
         return 4;
-    if (slot === "morning" && suit === "afternoon")
-        return 2;
-    if (slot === "afternoon" && suit === "morning")
-        return 2;
-    if (slot === "morning" && suit === "sunset_evening")
-        return 1;
-    if (slot === "afternoon" && suit === "sunset_evening")
-        return 2;
-    if (slot === "sunset_evening" && suit === "afternoon")
-        return 2;
-    if (slot === "sunset_evening" && suit === "morning")
+    if ((slot === "morning" && suit === "sunset_evening") || (slot === "sunset_evening" && suit === "morning"))
         return 1;
     return 2;
 }
@@ -665,14 +643,14 @@ export class DailySchedulerService {
                 (config.includeGenericMeals !== undefined
                     ? config.includeGenericMeals
                     : Boolean(requirements.destinationSlug || requirements.destination));
-            const scheduleMeal = (mealType, idealStartMinutes, mealDurationMinutes) => {
-                if (currentMinutes >= dayEndMinutes)
+            const scheduleMeal = (mealType: "lunch" | "dinner", idealStartMinutes: number, mealDurationMinutes: number, mealEndLimitMinutes = dayEndMinutes) => {
+                if (currentMinutes >= mealEndLimitMinutes)
                     return;
                 // Try to find a verified restaurant candidate
                 const diningCandidates = candidates.filter((c) => !scheduledPlaceIds.has(c.placeId) && isDiningCandidate(c));
                 let restaurantScheduled = false;
                 for (const cand of diningCandidates) {
-                    if (tryScheduleCandidate(cand, dayEndMinutes, "restaurant", mealType, idealStartMinutes, mealType)) {
+                    if (tryScheduleCandidate(cand, mealEndLimitMinutes, "restaurant", mealType, idealStartMinutes, mealType)) {
                         restaurantScheduled = true;
                         break;
                     }
@@ -682,7 +660,7 @@ export class DailySchedulerService {
                     const lastEnd = lastPlace ? timeToMinutes(lastPlace.endTime) : dayStartMinutes;
                     const mealStartMinutes = Math.max(idealStartMinutes, Math.max(currentMinutes, lastEnd));
                     const mealEndMinutes = mealStartMinutes + mealDurationMinutes;
-                    if (mealEndMinutes > dayEndMinutes)
+                    if (mealEndMinutes > mealEndLimitMinutes)
                         return;
                     // Represent lunch/dinner as a clean generic meal entry without fabricated place data or fake coordinates
                     const mealName = mealType === "lunch" ? "Lunch & Rest Break" : "Dinner & Leisure";
@@ -861,7 +839,9 @@ export class DailySchedulerService {
             if (currentAttractions.length < 2 &&
                 currentAttractions.length < dailyAttractionCapacity &&
                 currentMinutes < dayEndMinutes - 30) {
-                const unassignedAttractionsPool = candidates.filter((c) => !scheduledPlaceIds.has(c.placeId) && !isDiningCandidate(c));
+                const unassignedAttractionsPool = candidates.filter((c) => !scheduledPlaceIds.has(c.placeId) &&
+                    !isDiningCandidate(c) &&
+                    getPlaceTimeOfDaySuitability(c) !== "night");
                 // Future day reservation check: do not starve future days
                 const minFutureReserved = remainingDaysAfterToday * 1;
                 const canBackfill = remainingDaysAfterToday === 0 || unassignedAttractionsPool.length > minFutureReserved;
@@ -901,81 +881,121 @@ export class DailySchedulerService {
             // PERIOD 5: DINNER & EVENING LEISURE (19:00 -> 21:00)
             // -------------------------------------------------------------
             if (departureCutoff >= timeToMinutes("19:30") && dayPlaces.length > 0) {
-                const dinnerDuration = 60;
                 const dinnerEndLimit = Math.min(departureCutoff, timeToMinutes("21:00"));
-                const diningCandidates = candidates.filter((c) => !scheduledPlaceIds.has(c.placeId) && isDiningCandidate(c));
-                let dinnerScheduled = false;
-                for (const cand of diningCandidates) {
-                    if (tryScheduleCandidate(cand, dinnerEndLimit, "restaurant", "dinner", timeToMinutes("19:00"), "dinner")) {
-                        dinnerScheduled = true;
-                        break;
-                    }
-                }
-                if (!dinnerScheduled && shouldAddGenericMeals) {
-                    const lastPlace = dayPlaces[dayPlaces.length - 1];
-                    const lastEnd = lastPlace ? timeToMinutes(lastPlace.endTime) : dayStartMinutes;
-                    const dinnerStartMinutes = Math.max(timeToMinutes("19:00"), Math.max(currentMinutes, lastEnd));
-                    const dinnerEndMinutes = dinnerStartMinutes + dinnerDuration;
-                    if (dinnerEndMinutes <= dinnerEndLimit) {
-                        const genericDinner = {
-                            placeId: `dinner-day-${dayNumber}`,
-                            name: "Dinner & Leisure",
-                            destinationSlug: requirements.destinationSlug || "trip",
-                            category: "restaurant",
-                            location: {},
-                            source: "knowledge_base",
-                            provenance: { sources: [] }
-                        };
-                        dayPlaces.push({
-                            candidate: genericDinner,
-                            dayNumber,
-                            startTime: minutesToTime(dinnerStartMinutes),
-                            endTime: minutesToTime(dinnerEndMinutes),
-                            durationMinutes: dinnerDuration,
-                            durationSource: "default_assumption",
-                            travelTimeMinutesFromPrevious: 0,
-                            travelDistanceMetersFromPrevious: 0,
-                            travelEstimationSource: "buffer_only",
-                            activityType: "meal",
-                            mealType: "dinner",
-                            timePeriod: "dinner"
-                        });
-                        currentMinutes = dinnerEndMinutes;
-                        totalVisitMinutes += dinnerDuration;
-                    }
-                }
+                scheduleMeal("dinner", timeToMinutes("19:00"), 60, dinnerEndLimit);
             }
             // -------------------------------------------------------------
-            // PERIOD 6: NIGHT EXPERIENCES (20:30 -> 23:30)
-            // Supports genuine night experiences (night market, nightlife, club, camping, night tour)
+            // PERIOD 6: NIGHT EXPERIENCES & NIGHTLIFE (20:00 -> 23:00)
+            // Supports verified nightlife (lounges, pubs, clubs, night markets) and night experiences
             // -------------------------------------------------------------
-            if (departureCutoff >= timeToMinutes("21:30") && dayPlaces.length > 0) {
-                const nightActivityCap = Math.min(departureCutoff, timeToMinutes("23:30"));
+            if (departureCutoff >= timeToMinutes("21:00") && dayPlaces.length > 0) {
+                const nightActivityCap = Math.min(departureCutoff, timeToMinutes("23:00"));
                 const currentAttractionCount = dayPlaces.filter((p) => p.activityType === "attraction").length;
-                const totalUnassignedAttractions = candidates.filter((c) => !scheduledPlaceIds.has(c.placeId) && !isDiningCandidate(c)).length;
-                // Dedicated night candidates (clubs, night markets, camping) or general candidates only if surplus exists
-                const unassignedNightCandidates = candidates
-                    .filter((c) => !scheduledPlaceIds.has(c.placeId) && !isDiningCandidate(c))
-                    .filter((c) => {
-                    const suit = getPlaceTimeOfDaySuitability(c);
-                    if (suit === "night")
+                const userInterests = (requirements.interests || []).map((i: string) => i.toLowerCase().trim());
+                const hasNightlifeInterest = userInterests.some((i: string) => i.includes("nightlife"));
+                const isFamilyTrip = requirements.travelType === "family" || Boolean(requirements.travelers?.children && requirements.travelers.children > 0);
+
+                const isStrictNightlifeVenue = (c: CandidatePlace) => {
+                    const types = (c.provenance?.googleDetails?.types || []).map((t) => t.toLowerCase());
+                    if (types.some((t) => t.includes("night_club") || t.includes("bar") || t.includes("lounge") || t.includes("pub") || t.includes("live_music") || t.includes("bowling_alley"))) {
                         return true;
-                    // Only allow general candidate if day still has remaining capacity and future days won't be starved
-                    const minFuture = remainingDaysAfterToday * (totalUnassignedAttractions >= (remainingDaysAfterToday + 1) * 2 ? 2 : 1);
-                    return currentAttractionCount < dailyAttractionCapacity && totalUnassignedAttractions > minFuture && isCandidateSuitableForSlot(c, "night", currentMinutes, nightActivityCap);
-                });
+                    }
+                    const name = (c.name || "").toLowerCase();
+                    const desc = (c.description || "").toLowerCase();
+                    const nonNightBar = /\b(juice\s+bar|coffee\s+bar|tea\s+bar|salad\s+bar|snack\s+bar|milk\s+bar|ice\s+cream\s+bar|chocolate\s+bar|chaat\s+bar|espresso\s+bar|smoothie\s+bar)\b/i;
+                    if (nonNightBar.test(name) || nonNightBar.test(desc)) {
+                        return false;
+                    }
+                    return /\b(night\s*club|nightclub|pub|pubs|brewpub|microbrewery|taproom|lounge|bar|restobar|restro\s*bar|discotheque|nightlife)\b/i.test(name) ||
+                        /\b(night\s*club|nightclub|nightlife|pub|lounge|microbrewery|discotheque)\b/i.test(desc);
+                };
+
+                const isNightlifeCandidate = (c: CandidatePlace) => {
+                    const suit = getPlaceTimeOfDaySuitability(c);
+                    if (suit === "night") return true;
+                    if (isStrictNightlifeVenue(c)) return true;
+                    const name = (c.name || "").toLowerCase();
+                    const desc = (c.description || "").toLowerCase();
+                    return /\b(night\s*market|night\s*bazaar|sound\s+and\s+light\s+show)\b/i.test(name) ||
+                        /\b(night\s*market|night\s*bazaar|sound\s+and\s+light\s+show)\b/i.test(desc);
+                };
+
+                const isTravelerSuitable = (c: CandidatePlace) => {
+                    if (!isFamilyTrip) return true;
+                    if (c.familyFriendly === false) return false;
+                    const types = (c.provenance?.googleDetails?.types || []).map((t) => t.toLowerCase());
+                    const name = (c.name || "").toLowerCase();
+                    const desc = (c.description || "").toLowerCase();
+                    if (types.includes("night_club") || /\b(night\s*club|nightclub)\b/i.test(name) || /\b(night\s*club|nightclub)\b/i.test(desc)) {
+                        return false;
+                    }
+                    if ((types.includes("bar") || /\b(pub|brewpub|microbrewery|taproom|bar)\b/i.test(name)) && !types.includes("restaurant") && !name.includes("cafe")) {
+                        return false;
+                    }
+                    return true;
+                };
+
+                const isBudgetSuitable = (c: CandidatePlace) => {
+                    if (requirements.budget?.category === "budget") {
+                        const priceLevel = c.priceLevel;
+                        if (typeof priceLevel === "number" && priceLevel >= 3) {
+                            return false;
+                        }
+                    }
+                    return true;
+                };
+
+                const isHoursSuitable = (c: CandidatePlace) => {
+                    const hours = parseStructuredHours(c.openingHours);
+                    if (hours) {
+                        if (hours.openMinutes >= nightActivityCap) {
+                            return false;
+                        }
+                        if (hours.closeMinutes <= timeToMinutes("20:30")) {
+                            return false;
+                        }
+                    }
+                    return true;
+                };
+
+                const totalUnassignedAttractions = candidates.filter((c) => !scheduledPlaceIds.has(c.placeId) && !isDiningCandidate(c)).length;
+                const minFuture = remainingDaysAfterToday * (totalUnassignedAttractions >= (remainingDaysAfterToday + 1) * 2 ? 2 : 1);
+
+                // Relaxed pace protection: do not overload if day already has heavy visit time
+                const isPaceOverloaded = pace === "relaxed" && totalVisitMinutes >= 300;
+
+                const unassignedNightCandidates = isPaceOverloaded
+                    ? []
+                    : candidates
+                        .filter((c) => !scheduledPlaceIds.has(c.placeId))
+                        .filter((c) => {
+                            if (!isTravelerSuitable(c) || !isBudgetSuitable(c) || !isHoursSuitable(c)) {
+                                return false;
+                            }
+                            if (hasNightlifeInterest) {
+                                return isNightlifeCandidate(c);
+                            }
+                            // Default non-nightlife: exclude dining and strict nightlife venues (clubs, pubs, bars, lounges);
+                            // allow only general night experiences (e.g., night market, stargazing, sound & light show) within capacity.
+                            if (isDiningCandidate(c) || isStrictNightlifeVenue(c)) return false;
+                            const suit = getPlaceTimeOfDaySuitability(c);
+                            return suit === "night" &&
+                                currentAttractionCount < dailyAttractionCapacity &&
+                                totalUnassignedAttractions > minFuture &&
+                                isCandidateSuitableForSlot(c, "night", currentMinutes, nightActivityCap);
+                        });
+
                 if (unassignedNightCandidates.length > 0 && currentMinutes < nightActivityCap - 45) {
                     const sortedNightPool = [...unassignedNightCandidates].sort((a, b) => {
                         return scoreSlotFit(b, "night", isHighRain) - scoreSlotFit(a, "night", isHighRain);
                     });
                     for (const cand of sortedNightPool) {
-                        const suit = getPlaceTimeOfDaySuitability(cand);
-                        if (suit === "night" || currentAttractionCount < dailyAttractionCapacity) {
-                            const hours = parseStructuredHours(cand.openingHours);
-                            const minNightStart = hours ? Math.max(hours.openMinutes, currentMinutes) : Math.max(timeToMinutes("20:30"), currentMinutes);
-                            if (tryScheduleCandidate(cand, nightActivityCap, "attraction", undefined, minNightStart, "night")) {
-                                break;
-                            }
+                        const hours = parseStructuredHours(cand.openingHours);
+                        const minNightStart = hours
+                            ? Math.max(hours.openMinutes, Math.max(timeToMinutes("20:00"), currentMinutes))
+                            : Math.max(timeToMinutes("20:00"), currentMinutes);
+                        if (tryScheduleCandidate(cand, nightActivityCap, "attraction", undefined, minNightStart, "night")) {
+                            break;
                         }
                     }
                 }

@@ -38,8 +38,11 @@ export class WhatsAppInteractiveService {
     static sendLocationCategoryMenu(to: string, lang = "en") {
         return MenuScreensPresenter.sendLocationCategoryMenu(to, lang);
     }
-    static sendWeatherCard(to: string, destination: string, forecasts: DailyForecast[], tripId: string, lang = "en", dateRangeStr: string) {
-        return MenuScreensPresenter.sendWeatherCard(to, destination, forecasts, tripId, lang, dateRangeStr);
+    static sendWeatherCard(to: string, destination: string, forecasts: DailyForecast[], tripId: string, lang = "en", dateRangeStr: string, origin?: "location" | "menu") {
+        return MenuScreensPresenter.sendWeatherCard(to, destination, forecasts, tripId, lang, dateRangeStr, origin);
+    }
+    static sendWeatherPrompt(to: string, lang = "en") {
+        return MenuScreensPresenter.sendWeatherPrompt(to, lang);
     }
     static hasCompletedItinerary(trip: ITripDocument | null | undefined) {
         if (!trip)

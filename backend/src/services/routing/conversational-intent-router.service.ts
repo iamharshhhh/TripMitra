@@ -242,8 +242,22 @@ export class ConversationalIntentRouter {
         }
 
         // 10. EXPLICIT NAMED LOCATION / NEARBY SEARCH
-        const isExplicitNearPhrase = /\b(near|around|in|at|ke paas|jawal|paas)\b/i.test(lower) ||
-            /(जवळ|पास|में)/u.test(trimmed);
+        const hasRefreshOption = Array.isArray((activeMenuContext as any)?.validOptions) &&
+            (activeMenuContext as any).validOptions.some((o: any) => String(o?.rawActionId || "").startsWith("ACT_WEATHER_REFRESH"));
+        const hasShareLocationPromptOption = Array.isArray((activeMenuContext as any)?.validOptions) &&
+            (activeMenuContext as any).validOptions.some((o: any) => o?.rawActionId === "MENU_LOCATION");
+        const isActiveWeatherPrompt = Boolean(
+            activeMenuContext &&
+            activeMenuContext.menuType === "weather_card" &&
+            activeMenuContext.expiresAt &&
+            new Date(activeMenuContext.expiresAt) > new Date() &&
+            !hasRefreshOption &&
+            ((activeMenuContext as any).tripId === "__weather_prompt__" || hasShareLocationPromptOption || !Array.isArray((activeMenuContext as any).validOptions))
+        );
+        const isStrictNearKeyword = /\b(near|around|ke paas|jawal|paas)\b/i.test(lower) ||
+            /(जवळ|पास)/u.test(trimmed);
+        const isExplicitNearPhrase = isStrictNearKeyword ||
+            (!isActiveWeatherPrompt && (/\b(in|at)\b/i.test(lower) || /(में)/u.test(trimmed)));
 
         if (isExplicitNearPhrase || isNearMe) {
             const extractedCity = this.extractCityFromText(trimmed);
@@ -278,7 +292,7 @@ export class ConversationalIntentRouter {
             };
         }
 
-        // 9. AMBIGUOUS STANDALONE DATE (Without active date prompt)
+        // 12. AMBIGUOUS STANDALONE DATE (Without active date prompt)
         const standaloneDateResult = parseTravelDate(trimmed);
         const isStandaloneDateWord = /\b(tomorrow|today|this weekend|next weekend|udya|kya|कल|आज)\b/i.test(lower);
         if (standaloneDateResult.success && isStandaloneDateWord && (!activeMenuContext || activeMenuContext.menuType !== "wizard_travel_date")) {
@@ -289,7 +303,39 @@ export class ConversationalIntentRouter {
             };
         }
 
-        // 10. GENERAL TRAVEL CHAT (Safe Deterministic Fallback)
+        // 13. ACTIVE WEATHER PROMPT CITY REPLY (When user replies with a city name to sendWeatherPrompt)
+        if (isActiveWeatherPrompt) {
+            const isConversationalQuestion =
+                /[?]/.test(trimmed) ||
+                /\b(what|why|how|when|who|where|which|can\s+you|could\s+you|should\s+i|suggest|recommend|tell|explain|pack|is\s+it)\b/i.test(lower);
+            const cleanedCityReply = trimmed
+                .replace(/^(?:in|for|at)\s+/i, "")
+                .replace(/\s+(?:मे|में|मध्ये)$/u, "")
+                .replace(/[,.?!]+$/, "")
+                .trim();
+            const isConversationalFiller =
+                /^(?:thanks|thank\s+you|thx|ty|ok|okay|k|kk|great|good|nice|cool|awesome|perfect|got\s+it|understood|yes|yeah|yep|no|nope|nah|sure|alright|fine|bye|goodbye|done|cancel|stop|nevermind|never\s+mind|hmm|oh|wow)$/i.test(cleanedCityReply) ||
+                /^(?:धन्यवाद|शुक्रिया|ठीक|ठीक\s+आहे|ठीक\s+है|बरं|अच्छा|छान|बढ़िया|हो|होय|नाही|हाँ|हां|नहीं|नको|चालेल|बस|बाय)$/u.test(cleanedCityReply);
+            const wordCount = cleanedCityReply.split(/\s+/).filter(Boolean).length;
+            if (!isConversationalQuestion &&
+                !isConversationalFiller &&
+                !/^\d+$/.test(cleanedCityReply) &&
+                cleanedCityReply.length >= 2 &&
+                cleanedCityReply.length <= 40 &&
+                wordCount >= 1 &&
+                wordCount <= 4 &&
+                /^[A-Za-z\u0900-\u097F][A-Za-z\u0900-\u097F\s,.-]*$/u.test(cleanedCityReply)) {
+                const extractedCity = this.extractCityFromText(trimmed) || cleanedCityReply;
+                return {
+                    intent: "WEATHER",
+                    confidence: 0.95,
+                    extractedCity,
+                    isTopicSwitch: false
+                };
+            }
+        }
+
+        // 14. GENERAL TRAVEL CHAT (Safe Deterministic Fallback)
         return {
             intent: "GENERAL_TRAVEL_CHAT",
             confidence: 0.7,

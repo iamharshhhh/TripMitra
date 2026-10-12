@@ -258,10 +258,20 @@ export class WhatsAppMessageService {
                                 }
                             }
                         } catch (actionErr) {
-                            logger.error({ err: actionErr instanceof Error ? actionErr.message : actionErr, rawActionId }, "Failed to execute interactive action; sending main menu fallback");
-                            const fallbackMenu = WhatsAppInteractiveService.sendMainMenu(formattedPhone, activeLanguage);
-                            if (fallbackMenu.interactivePayload) {
-                                await WhatsAppService.sendInteractiveMessage(formattedPhone, fallbackMenu.interactivePayload);
+                            logger.error({ err: actionErr instanceof Error ? actionErr.message : actionErr, rawActionId }, "Failed to execute interactive action; sending fallback response");
+                            const isCancelConfirmAction = typeof rawActionId === "string" && rawActionId.startsWith("ACT_TRIP_CANCEL_CONFIRM");
+                            if (isCancelConfirmAction) {
+                                const cancelErrNotice = activeLanguage === "mr"
+                                    ? "⚠️ सहल रद्द करण्यात अडचण आली. कृपया पुन्हा प्रयत्न करा."
+                                    : activeLanguage === "hi"
+                                        ? "⚠️ ट्रिप रद्द करने में समस्या आई। कृपया पुनः प्रयास करें।"
+                                        : "⚠️ Could not cancel the trip right now. Please try again.";
+                                await WhatsAppService.sendTextMessage(formattedPhone, cancelErrNotice);
+                            } else {
+                                const fallbackMenu = WhatsAppInteractiveService.sendMainMenu(formattedPhone, activeLanguage);
+                                if (fallbackMenu.interactivePayload) {
+                                    await WhatsAppService.sendInteractiveMessage(formattedPhone, fallbackMenu.interactivePayload);
+                                }
                             }
                         } finally {
                             this.activeInboundMessageIds.delete(externalMessageId);
