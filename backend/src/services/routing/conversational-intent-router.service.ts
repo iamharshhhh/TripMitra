@@ -205,6 +205,20 @@ export class ConversationalIntentRouter {
             };
         }
 
+        // 8b. INFORMATIONAL LANDMARK / PLACE INQUIRY (e.g. "Tell me about Marina Beach", "What is special about Shaniwar Wada")
+        const isInformationalInquiry =
+            /\b(?:tell\s+(?:me|mi)\s+about|what\s+is\s+special\s+about|what\s+is|history\s+of|details\s+of|describe|information\s+on|info\s+about|know\s+about)\b/i.test(lower) ||
+            /(?:बद्दल\s+माहिती|विषयी\s+सांगा|के\s+बारे\s+में\s+बताओ|की\s+जानकारी)/u.test(trimmed);
+        if (isInformationalInquiry) {
+            const extractedPlace = this.extractCityFromText(trimmed);
+            return {
+                intent: "GENERAL_TRAVEL_CHAT",
+                confidence: 0.95,
+                extractedCity: extractedPlace,
+                isTopicSwitch: false
+            };
+        }
+
         // 9. PLACES / ATTRACTIONS INTENT
         const isPlaces = /\b(places|attractions|visit|sightseeing|spots|monuments|fort|temple|beach|firayla|ghoomne)\b/i.test(lower) ||
             /(ठिकाणे|स्थल|दर्शनीय|घूमने|पाहण्यासारखी)/u.test(trimmed);
@@ -292,9 +306,10 @@ export class ConversationalIntentRouter {
     }
 
     /**
-     * Extracts city or locality name from text query (e.g. "near Swargate", "Katraj ke paas", "Katraj jawal", "in Pune", "weather in Goa").
+     * Extracts city or named location phrase from text query (e.g. "near Katraj, Pune", "near Swargate", "Katraj ke paas", "in Pune", "about Marina Beach").
      */
     static extractCityFromText(text: any) {
+        if (!text || typeof text !== "string") return undefined;
         const ignore = [
             "today",
             "tomorrow",
@@ -321,24 +336,52 @@ export class ConversationalIntentRouter {
             "give",
             "some",
             "good",
-            "best"
+            "best",
+            "visit",
+            "see",
+            "explore",
+            "about",
+            "tell",
+            "kya",
+            "hai"
         ];
-        // 1. Check English prepositional match: "near Katraj", "in Pune", "around Swargate"
+        // 1. Check English prepositional match: "near Katraj, Pune", "in Pune", "around Swargate", "about Marina Beach", "near Two Rivers", "in Friends Colony"
         // eslint-disable-next-line no-misleading-character-class
-        const prepMatch = text.match(/\b(?:in|near|at|to|for|of|around)\s+([A-Za-z\u0900-\u097F]{3,20})\b/iu);
+        const prepMatch = text.match(/\b(?:in|near|at|to|of|around|about|regarding)\s+([A-Za-z\u0900-\u097F\s,.-]{2,40})/iu);
         if (prepMatch && prepMatch[1]) {
-            const city = prepMatch[1].trim();
-            if (!ignore.includes(city.toLowerCase())) {
-                return city.charAt(0).toUpperCase() + city.slice(1);
+            let candidate = prepMatch[1].trim();
+            // Truncate at subsequent clause conjunctions, verbs, or temporal terms without breaking compound place names
+            candidate = candidate.split(/\s+\b(?:and\s+(?:please|suggest|show|give|what|tell|how)|today|tomorrow|tonight|weekend|kya|hai|batao|suggest|please|for|with|from)\b/i)[0].trim();
+            candidate = candidate.replace(/^the\s+/i, "");
+            candidate = candidate.replace(/[,.?!]+$/, "").trim();
+            const words = candidate.split(/\s+/);
+            while (words.length > 0 && ignore.includes(words[words.length - 1].toLowerCase())) {
+                words.pop();
+            }
+            candidate = words.join(" ").trim();
+            const isNonLocation = /^(?:(?:two|three|four|five|\d+)?\s*(?:people|persons|family|couple|kids|children|group|guests|adults)|(?:my|our|your)\s+(?:family|friends|group|kids|children))$/i.test(candidate);
+            if (candidate.length >= 2 && !ignore.includes(candidate.toLowerCase()) && !isNonLocation) {
+                return candidate;
             }
         }
         // 2. Check Hinglish/Minglish postpositional match: "Katraj ke paas", "Katraj jawal", "Swargate paas", "Pune mein"
         // eslint-disable-next-line no-misleading-character-class
-        const postMatch = text.match(/\b([A-Za-z\u0900-\u097F]{3,20})\s+(?:ke\s+paas|jawal|paas|mai|mein|chya)\b/iu);
+        const postMatch = text.match(/\b([A-Za-z\u0900-\u097F\s,.-]{2,40})\s+(?:ke\s+paas|jawal|paas|mai|mein|chya)\b/iu);
         if (postMatch && postMatch[1]) {
-            const city = postMatch[1].trim();
-            if (!ignore.includes(city.toLowerCase())) {
-                return city.charAt(0).toUpperCase() + city.slice(1);
+            let candidate = postMatch[1].trim();
+            candidate = candidate.replace(/^the\s+/i, "");
+            candidate = candidate.replace(/[,.?!]+$/, "").trim();
+            const words = candidate.split(/\s+/);
+            while (words.length > 0 && ignore.includes(words[0].toLowerCase())) {
+                words.shift();
+            }
+            while (words.length > 0 && ignore.includes(words[words.length - 1].toLowerCase())) {
+                words.pop();
+            }
+            candidate = words.join(" ").trim();
+            const isNonLocation = /^(?:(?:two|three|four|five|\d+)?\s*(?:people|persons|family|couple|kids|children|group|guests|adults)|(?:my|our|your)\s+(?:family|friends|group|kids|children))$/i.test(candidate);
+            if (candidate.length >= 2 && !ignore.includes(candidate.toLowerCase()) && !isNonLocation) {
+                return candidate;
             }
         }
         // 3. Fallback check for known localities / cities in text

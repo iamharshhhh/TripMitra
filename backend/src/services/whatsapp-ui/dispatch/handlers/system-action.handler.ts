@@ -237,23 +237,28 @@ export class SystemActionHandler {
                     category: action.category,
                     destination: requestedDest
                 });
-                const reply = locationResult?.formattedMessage || strings.menuHeaders.locationRequiredForDiscovery;
-                const locMenu = WhatsAppInteractiveService.sendLocationDiscoveryMenu(phoneNumber, activeLanguage);
-                return {
-                    ...locMenu,
-                    textMessages: [reply]
-                };
+                if (locationResult) {
+                    const locMenu = WhatsAppInteractiveService.sendLocationDiscoveryMenu(phoneNumber, activeLanguage);
+                    return {
+                        ...locMenu,
+                        textMessages: [locationResult.formattedMessage]
+                    };
+                }
+                return WhatsAppInteractiveService.sendLocationMenu(phoneNumber, activeLanguage, false);
             }
             catch (err) {
                 logger.error({ err, category: action.category }, "Failed to evaluate live location places category");
+                const activePin = SessionLocationStore.getLocation(conversationId);
                 const placesNotice = activeLanguage === "mr"
-                    ? "क्षमा करा, मी सध्या जवळपासची ठिकाणे शोधू शकलो नाही. कृपया थोड्या वेळाने पुन्हा प्रयत्न करा."
+                    ? "⚠️ जवळपासची ठिकाणे शोधण्यात अडचण आली. कृपया थोड्या वेळाने पुन्हा प्रयत्न करा."
                     : activeLanguage === "hi"
-                        ? "क्षमा करें, मैं अभी आस-पास के स्थान नहीं खोज सका। कृपया थोड़ी देर बाद पुनः प्रयास करें।"
-                        : "Sorry, I couldn't fetch nearby places right now. Please try again in a moment.";
-                const locMenu = WhatsAppInteractiveService.sendLocationDiscoveryMenu(phoneNumber, activeLanguage);
+                        ? "⚠️ आस-पास के स्थान खोजने में समस्या आई। कृपया थोड़ी देर बाद पुनः प्रयास करें।"
+                        : "⚠️ Could not retrieve nearby places at the moment. Please try again in a moment.";
+                const menu = activePin
+                    ? WhatsAppInteractiveService.sendLocationDiscoveryMenu(phoneNumber, activeLanguage)
+                    : WhatsAppInteractiveService.sendMainMenu(phoneNumber, activeLanguage);
                 return {
-                    ...locMenu,
+                    ...menu,
                     textMessages: [placesNotice]
                 };
             }
@@ -265,28 +270,28 @@ export class SystemActionHandler {
                     userId,
                     language: activeLanguage
                 });
-                const reply = locationResult?.formattedMessage ||
-                    (activeLanguage === "mr"
-                        ? "📍 कृपया प्रथम तुमचे थेट स्थान शेअर करा."
-                        : activeLanguage === "hi"
-                            ? "📍 कृपया पहले अपना लाइव स्थान साझा करें।"
-                            : "📍 Please share your live location first.");
-                const locMenu = WhatsAppInteractiveService.sendLocationDiscoveryMenu(phoneNumber, activeLanguage);
-                return {
-                    ...locMenu,
-                    textMessages: [reply]
-                };
+                if (locationResult) {
+                    const locMenu = WhatsAppInteractiveService.sendLocationDiscoveryMenu(phoneNumber, activeLanguage);
+                    return {
+                        ...locMenu,
+                        textMessages: [locationResult.formattedMessage]
+                    };
+                }
+                return WhatsAppInteractiveService.sendLocationMenu(phoneNumber, activeLanguage, false);
             }
             catch (err) {
                 logger.error({ err }, "Failed to evaluate next stop location");
+                const activePin = SessionLocationStore.getLocation(conversationId);
                 const navNotice = activeLanguage === "mr"
-                    ? "क्षमा करा, मी दिशा मिळवू शकलो नाही. कृपया थोड्या वेळाने पुन्हा प्रयत्न करा."
+                    ? "⚠️ पुढील ठिकाण शोधण्यात अडचण आली. कृपया थोड्या वेळाने पुन्हा प्रयत्न करा."
                     : activeLanguage === "hi"
-                        ? "क्षमा करें, मैं दिशा-निर्देश प्राप्त नहीं कर सका। कृपया थोड़ी देर बाद पुनः प्रयास करें।"
-                        : "Sorry, I couldn't fetch directions right now. Please try again in a moment.";
-                const locMenu = WhatsAppInteractiveService.sendLocationDiscoveryMenu(phoneNumber, activeLanguage);
+                        ? "⚠️ अगला पड़ाव खोजने में समस्या आई। कृपया थोड़ी देर बाद पुनः प्रयास करें।"
+                        : "⚠️ Could not retrieve your next stop at the moment. Please try again in a moment.";
+                const menu = activePin
+                    ? WhatsAppInteractiveService.sendLocationDiscoveryMenu(phoneNumber, activeLanguage)
+                    : WhatsAppInteractiveService.sendMainMenu(phoneNumber, activeLanguage);
                 return {
-                    ...locMenu,
+                    ...menu,
                     textMessages: [navNotice]
                 };
             }
@@ -301,23 +306,28 @@ export class SystemActionHandler {
                     category: "attractions",
                     destination: requestedDest
                 });
-                const reply = locationResult?.formattedMessage || strings.menuHeaders.locationRequiredForDiscovery;
-                const navMenu = WhatsAppInteractiveService.sendLocationDiscoveryMenu(phoneNumber, activeLanguage);
-                return {
-                    ...navMenu,
-                    textMessages: [reply]
-                };
+                if (locationResult) {
+                    const navMenu = WhatsAppInteractiveService.sendLocationDiscoveryMenu(phoneNumber, activeLanguage);
+                    return {
+                        ...navMenu,
+                        textMessages: [locationResult.formattedMessage]
+                    };
+                }
+                return WhatsAppInteractiveService.sendLocationMenu(phoneNumber, activeLanguage, false);
             }
             catch (err) {
                 logger.error({ err }, "Failed to evaluate nearby places attractions");
+                const activePin = SessionLocationStore.getLocation(conversationId);
                 const placesNotice = activeLanguage === "mr"
-                    ? "क्षमा करा, मी सध्या जवळपासची ठिकाणे शोधू शकलो नाही. कृपया थोड्या वेळाने पुन्हा प्रयत्न करा."
+                    ? "⚠️ जवळपासची ठिकाणे शोधण्यात अडचण आली. कृपया थोड्या वेळाने पुन्हा प्रयत्न करा."
                     : activeLanguage === "hi"
-                        ? "क्षमा करें, मैं अभी आस-पास के स्थान नहीं खोज सका। कृपया थोड़ी देर बाद पुनः प्रयास करें।"
-                        : "Sorry, I couldn't fetch nearby places right now. Please try again in a moment.";
-                const navMenu = WhatsAppInteractiveService.sendLocationDiscoveryMenu(phoneNumber, activeLanguage);
+                        ? "⚠️ आस-पास के स्थान खोजने में समस्या आई। कृपया थोड़ी देर बाद पुनः प्रयास करें।"
+                        : "⚠️ Could not retrieve nearby places at the moment. Please try again in a moment.";
+                const menu = activePin
+                    ? WhatsAppInteractiveService.sendLocationDiscoveryMenu(phoneNumber, activeLanguage)
+                    : WhatsAppInteractiveService.sendMainMenu(phoneNumber, activeLanguage);
                 return {
-                    ...navMenu,
+                    ...menu,
                     textMessages: [placesNotice]
                 };
             }

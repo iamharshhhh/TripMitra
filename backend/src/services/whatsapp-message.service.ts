@@ -1074,12 +1074,7 @@ export class WhatsAppMessageService {
                 }
                 return;
             }
-        } else if (
-            classification.intent === "GPS_LOCATION_SEARCH" ||
-            classification.intent === "PLACES_ATTRACTIONS" ||
-            classification.intent === "RESTAURANTS_FOOD" ||
-            classification.intent === "HOTELS_STAYS"
-        ) {
+        } else if (classification.intent === "GPS_LOCATION_SEARCH") {
             const handlerResult: any = await WhatsAppActionHandler.handleAction({
                 action: { type: "LOC_CAT", category: (classification as any).category || "attractions" } as any,
                 userId,
