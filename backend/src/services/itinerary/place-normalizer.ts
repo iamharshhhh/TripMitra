@@ -104,6 +104,9 @@ export function normalizeGooglePlaceCandidate(place: NormalizedPlace, destinatio
         rating: typeof place.rating === "number" ? place.rating : undefined,
         userRatingCount: typeof place.userRatingCount === "number" ? place.userRatingCount : undefined,
         costConfidence: "unknown",
+        openingHours: place.regularOpeningHours?.weekdayDescriptions && place.regularOpeningHours.weekdayDescriptions.length > 0
+            ? place.regularOpeningHours.weekdayDescriptions
+            : undefined,
         source: "google-places",
         provenance: {
             sources: ["google-places"],

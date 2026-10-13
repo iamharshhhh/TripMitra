@@ -19,6 +19,15 @@ export interface ScheduledPlace {
     endTime: string;
     durationMinutes: number;
     durationSource: DurationSource;
+    visitDurationMinutes?: number;
+    transferDurationMinutes?: number;
+    waitingDurationMinutes?: number;
+    transitionBufferMinutes?: number;
+    transitionBufferNote?: string;
+    transferScheduleSource?: "verified_timetable" | "estimated" | "none";
+    transferNote?: string;
+    solarSource?: "forecast_sourced" | "estimated_model";
+    solarNote?: string;
     travelTimeMinutesFromPrevious: number;
     travelDistanceMetersFromPrevious: number;
     travelEstimationSource: TravelEstimationSource;
@@ -34,6 +43,12 @@ export interface DailySchedule {
     totalVisitMinutes: number;
     totalTravelMinutes: number;
     remainingMinutes: number;
+    totalAttractionVisitMinutes?: number;
+    totalMealMinutes?: number;
+    totalAccessTransferMinutes?: number;
+    totalWaitingAndBufferMinutes?: number;
+    totalDaytimeVisitMinutes?: number;
+    totalNightlifeVisitMinutes?: number;
     dayStartTime: string;
     dayEndTime: string;
 }
@@ -75,6 +90,8 @@ export interface ItinerarySchedulingConfig {
     dayWeatherSummaries?: Record<number, {
         precipitationProbability?: number;
         isSevere?: boolean;
+        sunrise?: string;
+        sunset?: string;
     }>;
     semanticPlan?: SemanticPlanResult;
 }

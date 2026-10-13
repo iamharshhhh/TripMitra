@@ -8,6 +8,8 @@ export interface DailyWeatherForecast {
     precipitationProbability: number;
     weatherCode: number;
     weatherDescription: string;
+    sunrise?: string;
+    sunset?: string;
     source: "open-meteo";
     retrievedAt: string;
 }

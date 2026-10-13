@@ -202,9 +202,22 @@ export class ItineraryFormatter {
         }
         if (place.travelTimeMinutesFromPrevious > 0) {
             const distStr = place.travelDistanceMetersFromPrevious > 0
-                ? ` · ${(place.travelDistanceMetersFromPrevious / 1000).toFixed(1)} km`
+                ? ` (${(place.travelDistanceMetersFromPrevious / 1000).toFixed(1)} km)`
                 : "";
-            lines.push(`🚗 ~${place.travelTimeMinutesFromPrevious} min${distStr}`);
+            if (place.transitionBufferMinutes && place.transitionBufferMinutes > 0) {
+                lines.push(`🚗 ~${place.travelTimeMinutesFromPrevious} min drive${distStr} · ${place.transitionBufferMinutes} min ${place.transitionBufferNote || "buffer"}`);
+            } else {
+                lines.push(`🚗 ~${place.travelTimeMinutesFromPrevious} min drive${distStr}`);
+            }
+        } else if (place.transitionBufferMinutes && place.transitionBufferMinutes > 0) {
+            lines.push(`⏳ ~${place.transitionBufferMinutes} min ${place.transitionBufferNote || "buffer"}`);
+        }
+        if (place.transferDurationMinutes && place.transferDurationMinutes > 0) {
+            const sourceLabel = place.transferScheduleSource === "verified_timetable" ? "Timetable" : "Estimated";
+            lines.push(`🚤 ~${place.transferDurationMinutes} min boat transfer · ~${place.waitingDurationMinutes || 0} min boarding wait (${sourceLabel})`);
+        }
+        if (place.solarNote) {
+            lines.push(place.solarNote);
         }
         const hasCoordinates = Boolean(place.location?.latitude && place.location?.longitude);
         const isGenericMealBreak = place.activityType === "meal" || (!hasCoordinates && (isLunch || isDinner) && !place.mapUrl);
@@ -248,6 +261,18 @@ export class ItineraryFormatter {
             ? (language === "mr" ? "दुपारचे जेवण" : language === "hi" ? "दोपहर का भोजन" : "LUNCH")
             : (language === "mr" ? "रात्रीचे जेवण" : language === "hi" ? "रात का भोजन" : "DINNER");
         lines.push(`🍽️ *${mealLabel}*`);
+        if (place.travelTimeMinutesFromPrevious > 0) {
+            const distStr = place.travelDistanceMetersFromPrevious > 0
+                ? ` (${(place.travelDistanceMetersFromPrevious / 1000).toFixed(1)} km)`
+                : "";
+            if (place.transitionBufferMinutes && place.transitionBufferMinutes > 0) {
+                lines.push(`🚗 ~${place.travelTimeMinutesFromPrevious} min drive${distStr} · ${place.transitionBufferMinutes} min ${place.transitionBufferNote || "buffer"}`);
+            } else {
+                lines.push(`🚗 ~${place.travelTimeMinutesFromPrevious} min drive${distStr}`);
+            }
+        } else if (place.transitionBufferMinutes && place.transitionBufferMinutes > 0) {
+            lines.push(`⏳ ~${place.transitionBufferMinutes} min ${place.transitionBufferNote || "buffer"}`);
+        }
         return lines.join("\n");
     }
 }

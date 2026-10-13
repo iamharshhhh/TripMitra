@@ -120,7 +120,7 @@ export class WeatherTool {
             const url = new URL("https://api.open-meteo.com/v1/forecast");
             url.searchParams.set("latitude", String(latitude));
             url.searchParams.set("longitude", String(longitude));
-            url.searchParams.set("daily", "weathercode,temperature_2m_max,temperature_2m_min,precipitation_probability_max");
+            url.searchParams.set("daily", "weathercode,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset");
             url.searchParams.set("timezone", "auto");
             if (startDate) {
                 url.searchParams.set("start_date", startDate);
@@ -162,7 +162,9 @@ export class WeatherTool {
                     weatherDescription: getWeatherDescription(code),
                     temperatureMax: daily.temperature_2m_max?.[i] ?? 0,
                     temperatureMin: daily.temperature_2m_min?.[i] ?? 0,
-                    precipitationProbability: daily.precipitation_probability_max?.[i] ?? 0
+                    precipitationProbability: daily.precipitation_probability_max?.[i] ?? 0,
+                    sunrise: daily.sunrise?.[i],
+                    sunset: daily.sunset?.[i]
                 });
             }
             const output = {

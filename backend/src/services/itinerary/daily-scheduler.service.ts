@@ -1,9 +1,16 @@
 import { CandidatePlace } from "../../types/candidate-place.types.js";
 import { GeographicGroupingService } from "./geographic-grouping.service.js";
-import { haversineDistanceMeters } from "../../utils/geography.js";
+import { haversineDistanceMeters, getDestinationCoordinates } from "../../utils/geography.js";
 import { logger } from "../../utils/logger.js";
 import { StructuredTripRequirements, PartialTripRequirements } from "../../types/trip-requirements.types.js";
-import { ItinerarySchedulingConfig } from "./itinerary-scheduling.types.js";
+import {
+    ItinerarySchedulingConfig,
+    DurationSource,
+    TravelEstimationSource,
+    ItineraryTimePeriod,
+    DailySchedule,
+    ScheduledPlace
+} from "./itinerary-scheduling.types.js";
 
 export const DEFAULT_SCHEDULING_CONFIG = {
     clusterRadiusMeters: 5000,
@@ -228,21 +235,128 @@ export function scoreSlotFit(cand: CandidatePlace, slot: "morning" | "afternoon"
     return 2;
 }
 /**
- * Estimates exploration duration according to attraction category and characteristics
- * when no reliable candidate-specific duration exists.
+ * Calculates local timezone offset in minutes from UTC based on GPS coordinates.
+ * Destination-agnostic: IST (+330 min) for Indian bounds, standard 15-deg longitude bands globally.
  */
-export function inferCandidateVisitDuration(candidate: CandidatePlace) {
-    if (typeof candidate.estimatedVisitDurationMinutes === "number" &&
-        candidate.estimatedVisitDurationMinutes > 0) {
-        return candidate.estimatedVisitDurationMinutes;
+export function getDestinationTimezoneOffsetMinutes(lat: number, lon: number): number {
+    if (lat >= 6 && lat <= 38 && lon >= 68 && lon <= 98) {
+        return 330;
     }
+    return Math.round(lon / 15) * 60;
+}
+
+/**
+ * Calculates astronomical local sunrise and sunset times using NOAA solar equations.
+ * Completely deterministic and timezone-aware without external API dependencies.
+ */
+export function calculateAstronomicalSolarTimes(
+    lat: number,
+    lon: number,
+    dateStr: string,
+    tzOffsetMinutes?: number
+): { sunrise: string; sunset: string } {
+    const tzOffset = tzOffsetMinutes !== undefined ? tzOffsetMinutes : getDestinationTimezoneOffsetMinutes(lat, lon);
+    const [year, month, day] = dateStr.split("-").map(Number);
+    const dateUtc = new Date(Date.UTC(year, month - 1, day));
+    const startOfYearUtc = new Date(Date.UTC(year, 0, 1));
+    const dayOfYear = Math.floor((dateUtc.getTime() - startOfYearUtc.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+
+    // Fractional year in radians
+    const gamma = (2 * Math.PI / 365) * (dayOfYear - 1);
+
+    // Spencer's Equation of Time (EoT) in minutes
+    const eot = 229.18 * (
+        0.000075 +
+        0.001868 * Math.cos(gamma) -
+        0.032077 * Math.sin(gamma) -
+        0.014615 * Math.cos(2 * gamma) -
+        0.040849 * Math.sin(2 * gamma)
+    );
+
+    // Spencer's Solar Declination (delta) in radians
+    const delta =
+        0.006918 -
+        0.399912 * Math.cos(gamma) +
+        0.070257 * Math.sin(gamma) -
+        0.006758 * Math.cos(2 * gamma) +
+        0.000907 * Math.sin(2 * gamma) -
+        0.002697 * Math.cos(3 * gamma) +
+        0.00148 * Math.sin(3 * gamma);
+
+    const latRad = (lat * Math.PI) / 180;
+    const zenithRad = (90.8333 * Math.PI) / 180; // Standard atmospheric refraction at horizon
+
+    const cosOmega0 = (Math.cos(zenithRad) - Math.sin(latRad) * Math.sin(delta)) / (Math.cos(latRad) * Math.cos(delta));
+    const clampedCos = Math.max(-1, Math.min(1, cosOmega0));
+    const omega0Rad = Math.acos(clampedCos);
+    const omega0Deg = (omega0Rad * 180) / Math.PI;
+
+    // Solar noon in UTC minutes from midnight
+    const solarNoonUtc = 720 - 4 * lon - eot;
+
+    // Sunrise and Sunset in UTC minutes
+    const sunriseUtc = solarNoonUtc - 4 * omega0Deg;
+    const sunsetUtc = solarNoonUtc + 4 * omega0Deg;
+
+    // Convert to local minutes
+    const sunriseLocalMins = Math.round(sunriseUtc + tzOffset);
+    const sunsetLocalMins = Math.round(sunsetUtc + tzOffset);
+
+    return {
+        sunrise: minutesToTime(sunriseLocalMins),
+        sunset: minutesToTime(sunsetLocalMins)
+    };
+}
+
+export interface CandidateDurationBreakdown {
+    visitDurationMinutes: number;
+    transferDurationMinutes: number;
+    waitingDurationMinutes: number;
+    totalDurationMinutes: number;
+    durationSource: DurationSource;
+    transferScheduleSource?: "verified_timetable" | "estimated" | "none";
+    transferNote?: string;
+}
+
+/**
+ * Infers granular duration components (visit, access transfer, waiting) for a candidate place.
+ */
+export function inferCandidateDurationBreakdown(candidate: CandidatePlace): CandidateDurationBreakdown {
     const name = (candidate.name || "").toLowerCase();
     const desc = (candidate.description || "").toLowerCase();
     const cat = (candidate.category || "").toLowerCase();
+    const id = (candidate.placeId || "").toLowerCase();
+
+    // Special access transfer: Paradise Beach (ferry access via Chunnambar Boat House)
+    const isParadiseBeach = name.includes("paradise beach") || id.includes("paradise") || (cat === "beach" && name.includes("paradise"));
+    if (isParadiseBeach) {
+        return {
+            visitDurationMinutes: 80,
+            transferDurationMinutes: 40,
+            waitingDurationMinutes: 30,
+            totalDurationMinutes: 150,
+            durationSource: typeof candidate.estimatedVisitDurationMinutes === "number" && candidate.estimatedVisitDurationMinutes > 0 ? "candidate" : "default_assumption",
+            transferScheduleSource: "estimated",
+            transferNote: "Ferry transfer via Chunnambar Boat House (~20 min each way, ~15 min wait)"
+        };
+    }
+
+    if (typeof candidate.estimatedVisitDurationMinutes === "number" && candidate.estimatedVisitDurationMinutes > 0) {
+        return {
+            visitDurationMinutes: candidate.estimatedVisitDurationMinutes,
+            transferDurationMinutes: 0,
+            waitingDurationMinutes: 0,
+            totalDurationMinutes: candidate.estimatedVisitDurationMinutes,
+            durationSource: "candidate"
+        };
+    }
+
     const googleTypes = (candidate.provenance?.googleDetails?.types || []).map((t) => t.toLowerCase());
-    // 1. Quick stops (45–60 min, default 45 min)
-    // Viewpoints, statues, memorials, photo points, small bazaars / markets
-    if (googleTypes.some((t) => ["shopping_mall", "store", "point_of_interest"].includes(t)) ||
+
+    // 1. Quick stops (45 min)
+    // Viewpoints, statues, memorials, photo points, markets, bazaars
+    // Explicitly removed point_of_interest and store to prevent blanket 45-min overrides
+    if (
         cat === "market" ||
         cat === "memorial" ||
         cat === "viewpoint" ||
@@ -252,12 +366,21 @@ export function inferCandidateVisitDuration(candidate: CandidatePlace) {
         name.includes("memorial") ||
         name.includes("market") ||
         name.includes("bazaar") ||
-        name.includes("lookout")) {
-        return 45;
+        name.includes("lookout")
+    ) {
+        return {
+            visitDurationMinutes: 45,
+            transferDurationMinutes: 0,
+            waitingDurationMinutes: 0,
+            totalDurationMinutes: 45,
+            durationSource: "default_assumption"
+        };
     }
-    // 2. Major venues / large complexes (150–210 min, default 180 min = 3h)
-    // Forts, palaces, national parks, wildlife sanctuaries, zoos, theme parks, amusement parks, hiking trails
-    if (googleTypes.some((t) => ["national_park", "zoo", "amusement_park", "theme_park", "aquarium", "hiking_area", "campground"].includes(t)) ||
+
+    // 2. Major venues / large complexes (180 min = 3h)
+    // Forts, palaces, national parks, wildlife sanctuaries, zoos, theme parks, safari, trekking
+    if (
+        googleTypes.some((t) => ["national_park", "zoo", "amusement_park", "theme_park", "aquarium", "hiking_area", "campground"].includes(t)) ||
         cat === "nature_reserve" ||
         cat === "theme_park" ||
         name.includes("national park") ||
@@ -269,12 +392,21 @@ export function inferCandidateVisitDuration(candidate: CandidatePlace) {
         name.includes("trek") ||
         desc.includes("national park") ||
         desc.includes("vast complex") ||
-        desc.includes("hiking trail")) {
-        return 180;
+        desc.includes("hiking trail")
+    ) {
+        return {
+            visitDurationMinutes: 180,
+            transferDurationMinutes: 0,
+            waitingDurationMinutes: 0,
+            totalDurationMinutes: 180,
+            durationSource: "default_assumption"
+        };
     }
-    // 3. Substantial cultural / heritage sites (90–120 min, default 90 min)
+
+    // 3. Substantial cultural / heritage sites (90 min)
     // Major museums, historical monuments, large temple/heritage complexes, art galleries, caves
-    if (googleTypes.some((t) => ["museum", "art_gallery", "hindu_temple", "church", "mosque"].includes(t)) ||
+    if (
+        googleTypes.some((t) => ["museum", "art_gallery", "hindu_temple", "church", "mosque"].includes(t)) ||
         cat === "historical" ||
         cat === "museum" ||
         cat === "religious" ||
@@ -288,12 +420,21 @@ export function inferCandidateVisitDuration(candidate: CandidatePlace) {
         name.includes("basilica") ||
         name.includes("cathedral") ||
         desc.includes("historical monument") ||
-        desc.includes("heritage site")) {
-        return 90;
+        desc.includes("heritage site")
+    ) {
+        return {
+            visitDurationMinutes: 90,
+            transferDurationMinutes: 0,
+            waitingDurationMinutes: 0,
+            totalDurationMinutes: 90,
+            durationSource: "default_assumption"
+        };
     }
-    // 4. Standard attractions / nature (60–90 min, default 75 min)
+
+    // 4. Standard attractions / nature (75 min)
     // Beaches, botanical gardens, promenades, lakefronts, parks, waterfalls
-    if (googleTypes.some((t) => ["park", "tourist_attraction"].includes(t)) ||
+    if (
+        googleTypes.some((t) => ["park", "tourist_attraction"].includes(t)) ||
         cat === "beach" ||
         cat === "nature" ||
         name.includes("beach") ||
@@ -303,10 +444,32 @@ export function inferCandidateVisitDuration(candidate: CandidatePlace) {
         name.includes("garden") ||
         desc.includes("beach") ||
         desc.includes("scenic") ||
-        desc.includes("waterfront")) {
-        return 75;
+        desc.includes("waterfront")
+    ) {
+        return {
+            visitDurationMinutes: 75,
+            transferDurationMinutes: 0,
+            waitingDurationMinutes: 0,
+            totalDurationMinutes: 75,
+            durationSource: "default_assumption"
+        };
     }
-    return 90;
+
+    return {
+        visitDurationMinutes: 90,
+        transferDurationMinutes: 0,
+        waitingDurationMinutes: 0,
+        totalDurationMinutes: 90,
+        durationSource: "default_assumption"
+    };
+}
+
+/**
+ * Estimates exploration duration according to attraction category and characteristics.
+ * Backward-compatible helper returning total duration.
+ */
+export function inferCandidateVisitDuration(candidate: CandidatePlace): number {
+    return inferCandidateDurationBreakdown(candidate).totalDurationMinutes;
 }
 export class DailySchedulerService {
     groupingService;
@@ -462,10 +625,10 @@ export class DailySchedulerService {
                 }
                 const lastLocatable = getLastLocatablePlace();
                 const prevPlace = lastLocatable?.candidate;
-                // Travel estimation
+                // Pure road/pedestrian transit estimation (strictly travel, distinct from buffers)
                 let travelDistanceMeters = 0;
                 let travelTimeMinutes = 0;
-                let travelEstimationSource = "buffer_only";
+                let travelEstimationSource: TravelEstimationSource = "buffer_only";
                 if (prevPlace &&
                     prevPlace.location?.latitude &&
                     prevPlace.location?.longitude &&
@@ -473,30 +636,61 @@ export class DailySchedulerService {
                     candidate.location?.longitude) {
                     travelDistanceMeters = haversineDistanceMeters(prevPlace.location.latitude, prevPlace.location.longitude, candidate.location.latitude, candidate.location.longitude);
                     const transitMinutes = Math.round((travelDistanceMeters / 1000 / config.planningSpeedKmH) * 60);
-                    travelTimeMinutes = Math.max(config.travelBufferMinutes, transitMinutes);
+                    travelTimeMinutes = Math.max(5, transitMinutes); // Real road/walking travel time only
                     travelEstimationSource = "geographic_estimate";
                 }
-                // Duration
+
+                // Transition buffer modeling
+                let transitionBufferMinutes = 0;
+                let transitionBufferNote: string | undefined = undefined;
+
+                // Duration components
                 let durationMinutes = config.defaultVisitDurationMinutes;
-                let durationSource = "default_assumption";
+                let durationSource: DurationSource = "default_assumption";
+                let visitDurationMinutes: number | undefined = undefined;
+                let transferDurationMinutes: number | undefined = undefined;
+                let waitingDurationMinutes: number | undefined = undefined;
+                let transferScheduleSource: "verified_timetable" | "estimated" | "none" | undefined = undefined;
+                let transferNote: string | undefined = undefined;
+
+                let placeStartMinutes = candidateStartBase + (lastPlace ? travelTimeMinutes : 0);
+
                 if (overrideMealType) {
-                    durationMinutes = config.defaultMealDurationMinutes || 60;
-                }
-                else if (typeof candidate.estimatedVisitDurationMinutes === "number" &&
-                    candidate.estimatedVisitDurationMinutes > 0) {
-                    durationMinutes = candidate.estimatedVisitDurationMinutes;
-                    durationSource = "candidate";
+                    const mealPaceDuration = overrideMealType === "lunch"
+                        ? (pace === "fast_paced" ? 45 : 60)
+                        : (config.defaultMealDurationMinutes || 60);
+                    durationMinutes = mealPaceDuration;
+                    durationSource = "default_assumption";
+                    // Fixed meal anchors
+                    const fixedMealAnchor = overrideMealType === "lunch" ? timeToMinutes("12:30") : timeToMinutes("19:00");
+                    const minSeatingBuffer = overrideMealType === "lunch" ? 15 : 5;
+                    const arrivalTime = lastEnd + (lastPlace ? travelTimeMinutes : 0);
+                    if (arrivalTime + minSeatingBuffer > fixedMealAnchor) {
+                        return false; // Cannot push the fixed meal anchor!
+                    }
+                    placeStartMinutes = fixedMealAnchor;
+                    transitionBufferMinutes = Math.max(minSeatingBuffer, placeStartMinutes - arrivalTime);
+                    transitionBufferNote = "arrival & seating buffer";
                 }
                 else {
-                    durationMinutes = inferCandidateVisitDuration(candidate);
-                    durationSource = "default_assumption";
+                    const breakdown = inferCandidateDurationBreakdown(candidate);
+                    durationMinutes = breakdown.totalDurationMinutes;
+                    durationSource = breakdown.durationSource;
+                    visitDurationMinutes = breakdown.visitDurationMinutes;
+                    transferDurationMinutes = breakdown.transferDurationMinutes;
+                    waitingDurationMinutes = breakdown.waitingDurationMinutes;
+                    transferScheduleSource = breakdown.transferScheduleSource;
+                    transferNote = breakdown.transferNote;
                 }
-                let placeStartMinutes = candidateStartBase + (lastPlace ? travelTimeMinutes : 0);
+
                 // Opening hours check and clean start adjustment
                 const structuredHours = parseStructuredHours(candidate.openingHours);
                 if (structuredHours) {
                     if (placeStartMinutes < structuredHours.openMinutes) {
+                        const waitTime = structuredHours.openMinutes - placeStartMinutes;
                         placeStartMinutes = structuredHours.openMinutes;
+                        waitingDurationMinutes = (waitingDurationMinutes || 0) + waitTime;
+                        durationMinutes += waitTime;
                     }
                     if (placeStartMinutes + durationMinutes > structuredHours.closeMinutes) {
                         return false;
@@ -511,6 +705,37 @@ export class DailySchedulerService {
                 if (placeEndMinutes > maxCutoff) {
                     return false;
                 }
+
+                // Solar time attribution
+                let solarSource: "forecast_sourced" | "estimated_model" | undefined = undefined;
+                let solarNote: string | undefined = undefined;
+                const suit = getPlaceTimeOfDaySuitability(candidate);
+                const isSunsetCandidate = suit === "sunset_evening" ||
+                    (placeStartMinutes >= timeToMinutes("16:30") &&
+                        (candidate.category === "beach" ||
+                            (candidate.name || "").toLowerCase().includes("beach") ||
+                            (candidate.name || "").toLowerCase().includes("promenade") ||
+                            (candidate.name || "").toLowerCase().includes("sunset")));
+
+                if (isSunsetCandidate && !overrideMealType) {
+                    const forecastSunset = dayWeatherSummary?.sunset;
+                    if (forecastSunset && typeof forecastSunset === "string" && forecastSunset.length >= 5) {
+                        const timeStr = forecastSunset.includes("T") ? forecastSunset.split("T")[1].substring(0, 5) : forecastSunset.substring(0, 5);
+                        solarSource = "forecast_sourced";
+                        solarNote = `🌇 ~${timeStr} (Forecast sunset window)`;
+                    } else {
+                        const coords = candidate.location?.latitude && candidate.location?.longitude
+                            ? candidate.location
+                            : (primaryCluster?.center || getDestinationCoordinates(requirements.destinationSlug || requirements.destination || ""));
+                        const dateStr = concreteDates[dayIdx] || "2026-10-20";
+                        if (coords?.latitude && coords?.longitude) {
+                            const solar = calculateAstronomicalSolarTimes(coords.latitude, coords.longitude, dateStr);
+                            solarSource = "estimated_model";
+                            solarNote = `🌇 ~${solar.sunset} (Estimated sunset window)`;
+                        }
+                    }
+                }
+
                 const activityType = overrideActivityType ||
                     (isDiningCandidate(candidate) ? "restaurant" : "attraction");
                 // Determine chronological time period
@@ -536,6 +761,15 @@ export class DailySchedulerService {
                     endTime: minutesToTime(placeEndMinutes),
                     durationMinutes,
                     durationSource,
+                    visitDurationMinutes,
+                    transferDurationMinutes,
+                    waitingDurationMinutes,
+                    transitionBufferMinutes,
+                    transitionBufferNote,
+                    transferScheduleSource,
+                    transferNote,
+                    solarSource,
+                    solarNote,
                     travelTimeMinutesFromPrevious: travelTimeMinutes,
                     travelDistanceMetersFromPrevious: travelDistanceMeters,
                     travelEstimationSource,
@@ -565,9 +799,10 @@ export class DailySchedulerService {
                 if (currentMinutes >= periodCapMinutes)
                     return false;
                 const currentAttractionsList = dayPlaces.filter((p) => p.activityType === "attraction");
-                const currentExplorationMins = currentAttractionsList.reduce((sum, p) => sum + p.durationMinutes, 0);
-                // Substantial exploration check: if day already has >= 2 attractions and >= 240 min (4h) of pure exploration, do not force extra places
-                if (currentAttractionsList.length >= 2 && currentExplorationMins >= 240) {
+                const currentExplorationMins = currentAttractionsList.reduce((sum, p) => sum + (p.visitDurationMinutes ?? p.durationMinutes), 0);
+                // Substantial exploration check: if day already has >= 2 attractions and reaches exploration limit, do not force extra places unless sunset window or high capacity
+                const explorationLimit = pace === "relaxed" ? 240 : (pace === "fast_paced" ? 420 : 360);
+                if (currentAttractionsList.length >= 2 && currentExplorationMins >= explorationLimit && preferredSlot !== "sunset_evening") {
                     return false;
                 }
                 if (currentAttractionsList.length >= dailyAttractionCapacity) {
@@ -658,10 +893,16 @@ export class DailySchedulerService {
                 if (!restaurantScheduled && shouldAddGenericMeals) {
                     const lastPlace = dayPlaces[dayPlaces.length - 1];
                     const lastEnd = lastPlace ? timeToMinutes(lastPlace.endTime) : dayStartMinutes;
-                    const mealStartMinutes = Math.max(idealStartMinutes, Math.max(currentMinutes, lastEnd));
+                    const mealStartMinutes = idealStartMinutes; // Fixed anchor: strictly 12:30 or 19:00!
                     const mealEndMinutes = mealStartMinutes + mealDurationMinutes;
                     if (mealEndMinutes > mealEndLimitMinutes)
                         return;
+                    const minBuffer = mealType === "lunch" ? 15 : 5;
+                    if (lastEnd + minBuffer > mealStartMinutes) {
+                        return; // Cannot move meal anchor!
+                    }
+                    const transitionBufferMinutes = Math.max(minBuffer, mealStartMinutes - lastEnd);
+                    const transitionBufferNote = "arrival & seating buffer";
                     // Represent lunch/dinner as a clean generic meal entry without fabricated place data or fake coordinates
                     const mealName = mealType === "lunch" ? "Lunch & Rest Break" : "Dinner & Leisure";
                     const genericMealCandidate = {
@@ -680,6 +921,8 @@ export class DailySchedulerService {
                         endTime: minutesToTime(mealEndMinutes),
                         durationMinutes: mealDurationMinutes,
                         durationSource: "default_assumption",
+                        transitionBufferMinutes,
+                        transitionBufferNote,
                         travelTimeMinutesFromPrevious: 0,
                         travelDistanceMetersFromPrevious: 0,
                         travelEstimationSource: "buffer_only",
@@ -708,12 +951,16 @@ export class DailySchedulerService {
             // -------------------------------------------------------------
             // PERIOD 1: MORNING SIGHTSEEING (Start -> ~12:30)
             // -------------------------------------------------------------
+            const isLateArrivalSkipLunch = isFirstDay && requirements.arrivalTime && timeToMinutes(requirements.arrivalTime) >= timeToMinutes("13:00");
+            const canHaveLunch = !isLateArrivalSkipLunch &&
+                dayStartMinutes < timeToMinutes("13:00") &&
+                dayEndMinutes >= timeToMinutes("13:30");
             const hasAfternoonWindow = dayEndMinutes >= timeToMinutes("16:00");
             const maxMorningAttractions = hasAfternoonWindow
                 ? (dailyAttractionCapacity <= 2 ? 1 : Math.min(2, Math.ceil(dailyAttractionCapacity / 2)))
                 : dailyAttractionCapacity;
             if (dayStartMinutes < timeToMinutes("12:00")) {
-                const morningCap = Math.min(dayEndMinutes, timeToMinutes("12:30"));
+                const morningCap = canHaveLunch ? timeToMinutes("12:30") - 15 : Math.min(dayEndMinutes, timeToMinutes("12:30"));
                 // 1. Try places from semantic plan
                 for (const cand of semanticMorning) {
                     if (dayPlaces.filter((p) => p.activityType === "attraction").length < maxMorningAttractions &&
@@ -749,23 +996,13 @@ export class DailySchedulerService {
                 }
             }
             // -------------------------------------------------------------
-            // PERIOD 2: LUNCH (12:30 -> 14:00)
+            // PERIOD 2: LUNCH (12:30 -> 13:30 / 13:15)
             // -------------------------------------------------------------
+            const isPartialArrival = isFirstDay && requirements.arrivalTime && timeToMinutes(requirements.arrivalTime) >= timeToMinutes("12:00") && timeToMinutes(requirements.arrivalTime) < timeToMinutes("13:00");
             const hasSightseeingToday = dayPlaces.some((p) => p.activityType === "attraction");
-            const isPartialArrival = isFirstDay && dayStartMinutes >= timeToMinutes("12:00");
-            const unassignedAttractionsCount = candidates.filter((c) => !scheduledPlaceIds.has(c.placeId) && !isDiningCandidate(c)).length;
-            // Ensure that on normal days, we attempt to schedule at least 1 attraction before lunch if candidates exist
-            if (!hasSightseeingToday && !isPartialArrival && unassignedAttractionsCount > 0 && currentMinutes < timeToMinutes("12:30")) {
-                scheduleNextSightseeing(Math.min(dayEndMinutes, timeToMinutes("12:30")), "morning");
-            }
-            const canHaveLunch = dayStartMinutes <= timeToMinutes("13:00") &&
-                dayEndMinutes >= timeToMinutes("13:30") &&
-                currentMinutes <= timeToMinutes("14:00") &&
-                (dayPlaces.length > 0 || isPartialArrival || unassignedAttractionsCount === 0);
-            if (canHaveLunch) {
+            if (canHaveLunch && (hasSightseeingToday || isPartialArrival)) {
                 const lunchDuration = pace === "fast_paced" ? 45 : 60;
-                const lunchStart = Math.max(timeToMinutes("12:30"), currentMinutes);
-                scheduleMeal("lunch", lunchStart, lunchDuration);
+                scheduleMeal("lunch", timeToMinutes("12:30"), lunchDuration);
             }
             // -------------------------------------------------------------
             // PERIOD 3: AFTERNOON SIGHTSEEING (13:30 -> 17:30)
@@ -865,10 +1102,11 @@ export class DailySchedulerService {
                         }
                         return 0;
                     });
+                    const daytimeCap = departureCutoff >= timeToMinutes("19:30") ? Math.min(dayEndMinutes, timeToMinutes("19:00") - 25) : dayEndMinutes;
                     for (const cand of sortedBackfillPool) {
                         if (dayPlaces.filter((p) => p.activityType === "attraction").length < dailyAttractionCapacity &&
-                            currentMinutes < dayEndMinutes - 30) {
-                            if (tryScheduleCandidate(cand, dayEndMinutes, "attraction")) {
+                            currentMinutes < daytimeCap - 30) {
+                            if (tryScheduleCandidate(cand, daytimeCap, "attraction")) {
                                 if (dayPlaces.filter((p) => p.activityType === "attraction").length >= 2) {
                                     break;
                                 }
@@ -880,7 +1118,7 @@ export class DailySchedulerService {
             // -------------------------------------------------------------
             // PERIOD 5: DINNER & EVENING LEISURE (19:00 -> 21:00)
             // -------------------------------------------------------------
-            if (departureCutoff >= timeToMinutes("19:30") && dayPlaces.length > 0) {
+            if (departureCutoff >= timeToMinutes("19:30") && (hasSightseeingToday || isPartialArrival)) {
                 const dinnerEndLimit = Math.min(departureCutoff, timeToMinutes("21:00"));
                 scheduleMeal("dinner", timeToMinutes("19:00"), 60, dinnerEndLimit);
             }
@@ -1003,12 +1241,38 @@ export class DailySchedulerService {
             // -------------------------------------------------------------
             // Finalize Day Schedule & Accurate Remaining Time Calculation
             // -------------------------------------------------------------
-            const daytimeActivities = dayPlaces.filter((p) => p.mealType !== "dinner" && p.timePeriod !== "night");
-            const lastDaytimePlace = daytimeActivities[daytimeActivities.length - 1];
-            const lastDaytimeEndMinutes = lastDaytimePlace
-                ? timeToMinutes(lastDaytimePlace.endTime)
-                : dayStartMinutes;
-            const remainingMinutes = Math.max(0, dayEndMinutes - Math.min(dayEndMinutes, lastDaytimeEndMinutes));
+            let totalAttractionVisitMinutes = 0;
+            let totalMealMinutes = 0;
+            let totalAccessTransferMinutes = 0;
+            let totalWaitingAndBufferMinutes = 0;
+            let totalDaytimeVisitMinutes = 0;
+            let totalNightlifeVisitMinutes = 0;
+
+            for (const p of dayPlaces) {
+                const isMeal = p.activityType === "meal" || p.mealType !== undefined;
+                if (isMeal) {
+                    totalMealMinutes += p.durationMinutes;
+                } else {
+                    const visitMins = p.visitDurationMinutes ?? p.durationMinutes;
+                    totalAttractionVisitMinutes += visitMins;
+                    if (p.timePeriod === "night") {
+                        totalNightlifeVisitMinutes += visitMins;
+                    } else {
+                        totalDaytimeVisitMinutes += visitMins;
+                    }
+                }
+                totalAccessTransferMinutes += p.transferDurationMinutes ?? 0;
+                totalWaitingAndBufferMinutes += (p.waitingDurationMinutes ?? 0) + (p.transitionBufferMinutes ?? 0);
+            }
+
+            const totalActiveMinutes = totalAttractionVisitMinutes +
+                totalMealMinutes +
+                totalAccessTransferMinutes +
+                totalWaitingAndBufferMinutes +
+                totalTravelMinutes;
+            const totalElapsedMinutes = dayEndMinutes - dayStartMinutes;
+            const remainingMinutes = Math.max(0, totalElapsedMinutes - totalActiveMinutes);
+
             dailySchedules.push({
                 dayNumber,
                 date: concreteDates[dayIdx] || undefined,
@@ -1017,6 +1281,12 @@ export class DailySchedulerService {
                 totalVisitMinutes,
                 totalTravelMinutes,
                 remainingMinutes,
+                totalAttractionVisitMinutes,
+                totalMealMinutes,
+                totalAccessTransferMinutes,
+                totalWaitingAndBufferMinutes,
+                totalDaytimeVisitMinutes,
+                totalNightlifeVisitMinutes,
                 dayStartTime: minutesToTime(dayStartMinutes),
                 dayEndTime: minutesToTime(dayEndMinutes)
             });

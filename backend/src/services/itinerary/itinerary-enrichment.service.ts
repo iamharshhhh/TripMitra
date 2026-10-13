@@ -3,6 +3,7 @@ import { BudgetEngineService } from "./budget.service.js";
 import { logger } from "../../utils/logger.js";
 import { SchedulingResult } from "./itinerary-scheduling.types.js";
 import { StructuredTripRequirements } from "../../types/trip-requirements.types.js";
+import { EnrichedItineraryResult } from "./itinerary-enrichment.types.js";
 
 export class ItineraryEnrichmentService {
     weatherService;
@@ -20,7 +21,7 @@ export class ItineraryEnrichmentService {
      * 3. Weather failure does not crash the itinerary generation.
      * 4. Unknown costs or weather never cause destructive candidate rejection.
      */
-    async enrichItinerary(requirements: Partial<StructuredTripRequirements>, schedulingResult: SchedulingResult, referenceDate: Date) {
+    async enrichItinerary(requirements: Partial<StructuredTripRequirements>, schedulingResult: SchedulingResult, referenceDate: Date): Promise<EnrichedItineraryResult> {
         const weatherWarnings = [];
         const budgetWarnings = [];
         // 1. All scheduled places across days
@@ -60,7 +61,7 @@ export class ItineraryEnrichmentService {
         }
         // Determine overall weather status
         const availableCount = weatherDays.filter((w) => w.status === "available").length;
-        let overallWeatherStatus = "unavailable";
+        let overallWeatherStatus: "available" | "partial" | "unavailable" = "unavailable";
         if (availableCount === weatherDays.length && weatherDays.length > 0) {
             overallWeatherStatus = "available";
         }
@@ -105,6 +106,12 @@ export class ItineraryEnrichmentService {
                 totalVisitMinutes: daySchedule.totalVisitMinutes,
                 totalTravelMinutes: daySchedule.totalTravelMinutes,
                 remainingMinutes: daySchedule.remainingMinutes,
+                totalAttractionVisitMinutes: daySchedule.totalAttractionVisitMinutes,
+                totalMealMinutes: daySchedule.totalMealMinutes,
+                totalAccessTransferMinutes: daySchedule.totalAccessTransferMinutes,
+                totalWaitingAndBufferMinutes: daySchedule.totalWaitingAndBufferMinutes,
+                totalDaytimeVisitMinutes: daySchedule.totalDaytimeVisitMinutes,
+                totalNightlifeVisitMinutes: daySchedule.totalNightlifeVisitMinutes,
                 dayStartTime: daySchedule.dayStartTime,
                 dayEndTime: daySchedule.dayEndTime,
                 dayWeather,
